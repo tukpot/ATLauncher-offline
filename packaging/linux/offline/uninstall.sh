@@ -20,5 +20,12 @@ if [[ "${1:-}" == "--purge" ]]; then
     echo "Purged data directory: $DATA_DIR"
 else
     echo "Kept your data directory: $DATA_DIR"
-    echo "Remove it too with: $0 --purge   (deletes accounts, instances, configs)"
+    echo "Re-run with --purge to also delete it (accounts, instances, configs)."
 fi
+
+# Refresh desktop/icon caches so the menu entry disappears (ignored if tools absent).
+command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1 || true
+command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+    gtk-update-icon-cache -f -t "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor" >/dev/null 2>&1 || true
+{ command -v kbuildsycoca6 >/dev/null 2>&1 && kbuildsycoca6 >/dev/null 2>&1; } || \
+    { command -v kbuildsycoca5 >/dev/null 2>&1 && kbuildsycoca5 >/dev/null 2>&1; } || true

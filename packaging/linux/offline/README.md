@@ -29,6 +29,18 @@ packaging/linux/offline/install.sh
 
 ## Uninstall
 
+One command (works even if you don't have the repo):
+
+```bash
+# remove the app (keeps your accounts and instances)
+curl -fsSL https://raw.githubusercontent.com/tukpot/ATLauncher-offline/master/packaging/linux/offline/uninstall.sh | bash
+
+# remove everything, including saved data
+curl -fsSL https://raw.githubusercontent.com/tukpot/ATLauncher-offline/master/packaging/linux/offline/uninstall.sh | bash -s -- --purge
+```
+
+From a cloned repo:
+
 ```bash
 packaging/linux/offline/uninstall.sh           # keeps your accounts and instances
 packaging/linux/offline/uninstall.sh --purge   # also removes saved data
