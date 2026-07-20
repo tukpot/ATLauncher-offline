@@ -103,8 +103,10 @@ public class ForgeLoader implements Loader {
 
         this.installerPath = FileSystem.LOADERS
                 .resolve("forge-" + this.minecraft + "-" + this.version + "-installer.jar");
-        this.installerUrl = Constants.DOWNLOAD_SERVER + "/maven/net/minecraftforge/forge/" + this.minecraft + "-"
-                + this.version + "/forge-" + this.minecraft + "-" + this.version + "-installer.jar";
+        // Download the installer straight from the official Forge Maven instead of the
+        // ATLauncher CDN, so installs work without the ATLauncher API/CDN being reachable.
+        this.installerUrl = Constants.FORGE_MAVEN + "/" + this.minecraft + "-" + this.version + "/forge-"
+                + this.minecraft + "-" + this.version + "-installer.jar";
 
         if (metadata.containsKey("installerSize")) {
             Object value = metadata.get("installerSize");
@@ -160,6 +162,16 @@ public class ForgeLoader implements Loader {
 
     @Override
     public void downloadAndExtractInstaller() throws Exception {
+        // When installing without the ATLauncher API (e.g. offline), the installer hash isn't
+        // provided in the metadata, so fetch it from the Forge Maven's .sha1 file.
+        if (installerSha1 == null) {
+            String sha1 = Download.build().setUrl(this.installerUrl + ".sha1").asString();
+
+            if (sha1 != null && sha1.matches("\\p{XDigit}{40}")) {
+                installerSha1 = sha1;
+            }
+        }
+
         OkHttpClient httpClient = Network.createProgressClient(instanceInstaller);
 
         Download download = Download.build().setUrl(this.installerUrl).downloadTo(installerPath)

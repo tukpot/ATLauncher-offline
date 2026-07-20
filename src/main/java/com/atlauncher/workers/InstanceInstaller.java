@@ -663,34 +663,40 @@ public class InstanceInstaller extends SwingWorker<Boolean, Void> implements Net
                 GetForgeLoaderVersionQuery.Data response = GraphqlClient
                     .callAndWait(new GetForgeLoaderVersionQuery(forgeVersionString));
 
-                if (response == null || response.forgeVersion() == null) {
-                    throw new Exception("Failed to find loader version for " + forgeVersionString);
-                }
-
                 Map<String, Object> loaderMeta = new HashMap<>();
                 loaderMeta.put("minecraft", curseForgeManifest.minecraft.version);
 
-                loaderMeta.put("version", response.forgeVersion().version());
-                loaderMeta.put("rawVersion", response.forgeVersion().rawVersion());
-                if (response.forgeVersion().installerSize() != null
-                    && response.forgeVersion().installerSha1Hash() != null) {
-                    loaderMeta.put("installerSize", response.forgeVersion().installerSize().longValue());
-                    loaderMeta.put("installerSha1", response.forgeVersion().installerSha1Hash());
-                }
-                if (response.forgeVersion().universalSize() != null
-                    && response.forgeVersion().universalSha1Hash() != null) {
-                    loaderMeta.put("universalSize", response.forgeVersion().universalSize().longValue());
-                    loaderMeta.put("universalSha1", response.forgeVersion().universalSha1Hash());
-                }
-                if (response.forgeVersion().clientSize() != null
-                    && response.forgeVersion().clientSha1Hash() != null) {
-                    loaderMeta.put("clientSize", response.forgeVersion().clientSize().longValue());
-                    loaderMeta.put("clientSha1", response.forgeVersion().clientSha1Hash());
-                }
-                if (response.forgeVersion().serverSize() != null
-                    && response.forgeVersion().serverSha1Hash() != null) {
-                    loaderMeta.put("serverSize", response.forgeVersion().serverSize().longValue());
-                    loaderMeta.put("serverSha1", response.forgeVersion().serverSha1Hash());
+                if (response != null && response.forgeVersion() != null) {
+                    loaderMeta.put("version", response.forgeVersion().version());
+                    loaderMeta.put("rawVersion", response.forgeVersion().rawVersion());
+                    if (response.forgeVersion().installerSize() != null
+                        && response.forgeVersion().installerSha1Hash() != null) {
+                        loaderMeta.put("installerSize", response.forgeVersion().installerSize().longValue());
+                        loaderMeta.put("installerSha1", response.forgeVersion().installerSha1Hash());
+                    }
+                    if (response.forgeVersion().universalSize() != null
+                        && response.forgeVersion().universalSha1Hash() != null) {
+                        loaderMeta.put("universalSize", response.forgeVersion().universalSize().longValue());
+                        loaderMeta.put("universalSha1", response.forgeVersion().universalSha1Hash());
+                    }
+                    if (response.forgeVersion().clientSize() != null
+                        && response.forgeVersion().clientSha1Hash() != null) {
+                        loaderMeta.put("clientSize", response.forgeVersion().clientSize().longValue());
+                        loaderMeta.put("clientSha1", response.forgeVersion().clientSha1Hash());
+                    }
+                    if (response.forgeVersion().serverSize() != null
+                        && response.forgeVersion().serverSha1Hash() != null) {
+                        loaderMeta.put("serverSize", response.forgeVersion().serverSize().longValue());
+                        loaderMeta.put("serverSha1", response.forgeVersion().serverSha1Hash());
+                    }
+                } else {
+                    // Fallback (offline / ATLauncher API unavailable): the Forge loader downloads
+                    // the installer directly from the Forge Maven and fetches the sha1 from the
+                    // .sha1 file, so build the metadata from the version in the manifest. Leaving
+                    // rawVersion unset lets ForgeLoader default it to "<minecraft>-<version>".
+                    LogManager.warn("Failed to resolve Forge version " + forgeVersionString
+                        + " via ATLauncher API, using version from manifest directly");
+                    loaderMeta.put("version", forgeVersionString);
                 }
 
                 packVersion.loader.metadata = loaderMeta;
@@ -730,15 +736,22 @@ public class InstanceInstaller extends SwingWorker<Boolean, Void> implements Net
                 GetNeoForgeLoaderVersionQuery.Data response = GraphqlClient
                     .callAndWait(new GetNeoForgeLoaderVersionQuery(neoForgeVersionString));
 
-                if (response == null || response.neoForgeVersion() == null) {
-                    throw new Exception("Failed to find loader version for " + neoForgeVersionString);
-                }
-
                 Map<String, Object> loaderMeta = new HashMap<>();
                 loaderMeta.put("minecraft", packVersion.minecraft);
 
-                loaderMeta.put("version", response.neoForgeVersion().version());
-                loaderMeta.put("rawVersion", response.neoForgeVersion().rawVersion());
+                if (response != null && response.neoForgeVersion() != null) {
+                    loaderMeta.put("version", response.neoForgeVersion().version());
+                    loaderMeta.put("rawVersion", response.neoForgeVersion().rawVersion());
+                } else {
+                    // Fallback (offline / ATLauncher API unavailable): the NeoForge loader
+                    // downloads the installer directly from the NeoForged Maven and fetches the
+                    // sha1 from the .sha1 file, so we can build the metadata straight from the
+                    // version declared in the CurseForge manifest without the ATLauncher API.
+                    LogManager.warn("Failed to resolve NeoForge version " + neoForgeVersionString
+                        + " via ATLauncher API, using version from manifest directly");
+                    loaderMeta.put("version", neoForgeVersionString);
+                    loaderMeta.put("rawVersion", neoForgeVersionString);
+                }
 
                 packVersion.loader.metadata = loaderMeta;
                 packVersion.loader.className = "com.atlauncher.data.minecraft.loaders.neoforge.NeoForgeLoader";
