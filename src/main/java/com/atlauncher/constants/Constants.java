@@ -56,6 +56,14 @@ public class Constants {
     public static final LauncherVersion VERSION;
     public static final String LAUNCHER_NAME = "ATLauncher";
     public static final String LAUNCHER_WEBSITE = "https://atlauncher.com";
+
+    // Self-update: this offline fork publishes its own releases on GitHub, so the launcher
+    // updates from there instead of ATLauncher's version/download servers.
+    public static final String GITHUB_RELEASES_REPO = "tukpot/ATLauncher-offline";
+    public static final String GITHUB_LATEST_RELEASE_API = "https://api.github.com/repos/"
+        + GITHUB_RELEASES_REPO + "/releases/latest";
+    public static final String GITHUB_RELEASES_PAGE = "https://github.com/" + GITHUB_RELEASES_REPO
+        + "/releases/latest";
     public static final String DEFAULT_THEME_CLASS = "com.atlauncher.themes.Dark";
     public static final String GA_TRACKING_ID = "UA-88820616-7";
     public static final String CROWDIN_URL = "https://crowdin.com/project/atlauncher";

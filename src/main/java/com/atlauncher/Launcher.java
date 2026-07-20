@@ -22,14 +22,15 @@ import java.awt.FlowLayout;
 import java.awt.Window;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import javax.swing.JDialog;
@@ -41,8 +42,8 @@ import org.mini2Dx.gettext.GetText;
 import com.atlauncher.builders.HTMLBuilder;
 import com.atlauncher.constants.Constants;
 import com.atlauncher.data.DownloadableFile;
+import com.atlauncher.data.GitHubRelease;
 import com.atlauncher.data.Instance;
-import com.atlauncher.data.LauncherVersion;
 import com.atlauncher.graphql.AddLauncherLaunchMutation;
 import com.atlauncher.graphql.type.AddLauncherLaunchInput;
 import com.atlauncher.graphql.type.LauncherJavaVersionInput;
@@ -71,15 +72,12 @@ import com.atlauncher.network.NetworkClient;
 import com.atlauncher.network.analytics.AnalyticsEvent;
 import com.atlauncher.utils.Java;
 import com.atlauncher.utils.OS;
-import com.google.gson.JsonIOException;
-import com.google.gson.JsonSyntaxException;
 import com.google.gson.reflect.TypeToken;
 
 import okhttp3.OkHttpClient;
 
 public class Launcher {
     // Holding update data
-    private LauncherVersion latestLauncherVersion; // Latest Launcher version
     private List<DownloadableFile> launcherFiles; // Files the Launcher needs to download
 
     // UI things
@@ -162,41 +160,120 @@ public class Launcher {
         PerformanceManager.end();
     }
 
-    public boolean launcherHasUpdate() {
-        try (InputStreamReader fileReader = new InputStreamReader(
-            Files.newInputStream(FileSystem.JSON.resolve("version.json")), StandardCharsets.UTF_8)) {
-            this.latestLauncherVersion = Gsons.DEFAULT.fromJson(fileReader, LauncherVersion.class);
-        } catch (JsonSyntaxException | JsonIOException | IOException e) {
-            LogManager.logStackTrace("Exception when loading latest launcher version!", e);
-        }
+    /**
+     * Fetches the latest release published on this fork's GitHub repo. Returns {@code null} if it
+     * can't be reached or parsed (e.g. offline), in which case we simply skip updating.
+     */
+    private GitHubRelease getLatestForkRelease() {
+        try {
+            String json = com.atlauncher.network.Download.build()
+                .setUrl(Constants.GITHUB_LATEST_RELEASE_API)
+                .header("Accept", "application/vnd.github+json")
+                .asString();
 
-        return this.latestLauncherVersion != null && Constants.VERSION.needsUpdate(this.latestLauncherVersion);
+            if (json == null) {
+                return null;
+            }
+
+            return Gsons.DEFAULT.fromJson(json, GitHubRelease.class);
+        } catch (Exception e) {
+            LogManager.logStackTrace("Failed to check for launcher update from GitHub", e);
+            return null;
+        }
     }
 
-    public void downloadUpdate() {
+    /**
+     * Parses the {@code reserved.major.minor.revision} numbers out of a release tag (e.g.
+     * {@code v3.4.41.0-offline}). Returns {@code null} if no version could be found.
+     */
+    private int[] parseVersionNumbers(String tag) {
+        if (tag == null) {
+            return null;
+        }
+
+        Matcher matcher = Pattern.compile("(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)").matcher(tag);
+
+        if (!matcher.find()) {
+            return null;
+        }
+
+        return new int[] { Integer.parseInt(matcher.group(1)), Integer.parseInt(matcher.group(2)),
+            Integer.parseInt(matcher.group(3)), Integer.parseInt(matcher.group(4)) };
+    }
+
+    /**
+     * Whether the given release is strictly newer than the running version. Only the numeric parts
+     * are compared (the release/beta stream is ignored) so that re-releasing the same version never
+     * triggers a spurious update loop.
+     */
+    public boolean launcherHasUpdate(GitHubRelease release) {
+        if (release == null || release.draft) {
+            return false;
+        }
+
+        int[] latest = parseVersionNumbers(release.tagName);
+
+        if (latest == null) {
+            return false;
+        }
+
+        int[] current = new int[] { Constants.VERSION.getReserved(), Constants.VERSION.getMajor(),
+            Constants.VERSION.getMinor(), Constants.VERSION.getRevision() };
+
+        for (int i = 0; i < 4; i++) {
+            if (latest[i] != current[i]) {
+                return latest[i] > current[i];
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Picks the release asset to download, matching the type of file we're currently running (exe
+     * on Windows, otherwise jar), falling back to any published jar.
+     */
+    private GitHubRelease.Asset pickUpdateAsset(GitHubRelease release) {
+        if (release.assets == null || release.assets.isEmpty()) {
+            return null;
+        }
+
+        File thisFile = new File(Update.class.getProtectionDomain().getCodeSource().getLocation().getPath());
+        String wanted = thisFile.getName().toLowerCase(Locale.ENGLISH).endsWith(".exe") ? ".exe" : ".jar";
+
+        return release.assets.stream()
+            .filter(a -> a.browserDownloadUrl != null && a.name != null)
+            .filter(a -> a.name.toLowerCase(Locale.ENGLISH).endsWith(wanted))
+            .findFirst()
+            .orElseGet(() -> release.assets.stream()
+                .filter(a -> a.browserDownloadUrl != null && a.name != null)
+                .filter(a -> a.name.toLowerCase(Locale.ENGLISH).endsWith(".jar"))
+                .findFirst().orElse(null));
+    }
+
+    public void downloadUpdate(GitHubRelease.Asset asset) {
         try {
             File thisFile = new File(Update.class.getProtectionDomain().getCodeSource().getLocation().getPath());
-            String path = thisFile.getCanonicalPath();
-            path = URLDecoder.decode(path, "UTF-8");
-            String toget;
-            String saveAs = thisFile.getName();
-            if (path.contains(".exe")) {
-                toget = "exe";
-            } else {
-                toget = "jar";
-            }
-            File newFile = FileSystem.TEMP.resolve(saveAs).toFile();
-            LogManager.info("Downloading Launcher Update");
+            String path = URLDecoder.decode(thisFile.getCanonicalPath(), "UTF-8");
+
+            // save the update under the running file's name so runUpdate replaces it correctly
+            File newFile = FileSystem.TEMP.resolve(thisFile.getName()).toFile();
+            LogManager.info("Downloading Launcher Update from " + asset.browserDownloadUrl);
             Analytics.trackEvent(AnalyticsEvent.simpleEvent("launcher_update"));
 
             ProgressDialog<Boolean> progressDialog = new ProgressDialog<>(GetText.tr("Downloading Launcher Update"), 1,
                 GetText.tr("Downloading Launcher Update"));
             progressDialog.addThread(new Thread(() -> {
                 com.atlauncher.network.Download download = com.atlauncher.network.Download.build()
-                    .setUrl(String.format("%s/%s.%s", Constants.DOWNLOAD_SERVER, Constants.LAUNCHER_NAME, toget))
+                    .setUrl(asset.browserDownloadUrl)
                     .withHttpClient(Network.createProgressClient(progressDialog)).downloadTo(newFile.toPath());
 
-                progressDialog.setTotalBytes(download.getFilesize());
+                if (asset.size > 0) {
+                    download = download.size(asset.size);
+                    progressDialog.setTotalBytes(asset.size);
+                } else {
+                    progressDialog.setTotalBytes(download.getFilesize());
+                }
 
                 try {
                     download.downloadFile();
@@ -386,49 +463,60 @@ public class Launcher {
     }
 
     private void checkForLauncherUpdate() {
-        // Launcher self-update is disabled in this fork. The upstream check compares against
-        // ATLauncher's own version/download servers, so leaving it on would (a) always report
-        // this fork as "out of date" and (b) overwrite the fork's jar with upstream ATLauncher.
-        // Disabling it here (rather than via the --no-launcher-update launch flag) guarantees no
-        // launch method can trigger a self-overwrite.
-        // TODO: replace this no-op with a check against this fork's own releases/version so it can
-        //       correctly report whether the fork itself is up to date.
-        if (true) {
+        PerformanceManager.start();
+
+        LogManager.debug("Checking for launcher update from " + Constants.GITHUB_RELEASES_REPO);
+
+        GitHubRelease release = getLatestForkRelease();
+
+        if (!launcherHasUpdate(release)) {
+            LogManager.debug("Launcher is up to date");
+            PerformanceManager.end();
             return;
         }
 
-        PerformanceManager.start();
+        LogManager.info("A launcher update is available: " + release.tagName);
 
-        LogManager.debug("Checking for launcher update");
-        if (launcherHasUpdate()) {
-            if (App.noLauncherUpdate) {
-                int ret = DialogManager.okDialog().setTitle("Launcher Update Available")
-                    .setContent(new HTMLBuilder().center().split(80).text(GetText.tr(
-                            "An update to the launcher is available. Please update via your package manager or manually by visiting https://atlauncher.com/downloads to get the latest features and bug fixes."))
-                        .build())
-                    .addOption(GetText.tr("Visit Downloads Page")).setType(DialogManager.INFO).show();
+        // --no-launcher-update: don't self-overwrite (e.g. installed by a package manager), just
+        // point the user at the releases page.
+        if (App.noLauncherUpdate) {
+            int ret = DialogManager.okDialog().setTitle("Launcher Update Available")
+                .setContent(new HTMLBuilder().center().split(80).text(GetText.tr(
+                        "An update to the launcher is available. Please update manually by visiting {0} to get the latest features and bug fixes.",
+                        Constants.GITHUB_RELEASES_PAGE))
+                    .build())
+                .addOption(GetText.tr("Visit Downloads Page")).setType(DialogManager.INFO).show();
 
-                if (ret == 1) {
-                    OS.openWebBrowser("https://atlauncher.com/downloads");
-                }
+            if (ret == 1) {
+                OS.openWebBrowser(Constants.GITHUB_RELEASES_PAGE);
+            }
 
+            PerformanceManager.end();
+            return;
+        }
+
+        if (!App.wasUpdated) {
+            GitHubRelease.Asset asset = pickUpdateAsset(release);
+
+            if (asset == null) {
+                LogManager.warn("Launcher update " + release.tagName
+                    + " is available but no downloadable jar/exe asset was found on the release");
+                PerformanceManager.end();
                 return;
             }
 
-            if (!App.wasUpdated) {
-                downloadUpdate(); // Update the Launcher
-            } else {
-                DialogManager.okDialog().setTitle("Update Failed!")
-                    .setContent(new HTMLBuilder().center()
-                        .text(GetText.tr("Update failed. Please click Ok to close "
-                            + "the launcher and open up the downloads page.<br/><br/>Download "
-                            + "the update and replace the old exe/jar file."))
-                        .build())
-                    .setType(DialogManager.ERROR).show();
-                OS.openWebBrowser("https://atlauncher.com/downloads");
-                Analytics.endSession();
-                System.exit(0);
-            }
+            downloadUpdate(asset); // Update the Launcher
+        } else {
+            DialogManager.okDialog().setTitle("Update Failed!")
+                .setContent(new HTMLBuilder().center()
+                    .text(GetText.tr("Update failed. Please click Ok to close "
+                        + "the launcher and open up the downloads page.<br/><br/>Download "
+                        + "the update and replace the old exe/jar file."))
+                    .build())
+                .setType(DialogManager.ERROR).show();
+            OS.openWebBrowser(Constants.GITHUB_RELEASES_PAGE);
+            Analytics.endSession();
+            System.exit(0);
         }
         LogManager.debug("Finished checking for launcher update");
         PerformanceManager.end();
