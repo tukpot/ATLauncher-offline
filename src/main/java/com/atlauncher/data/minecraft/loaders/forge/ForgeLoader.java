@@ -162,14 +162,17 @@ public class ForgeLoader implements Loader {
 
     @Override
     public void downloadAndExtractInstaller() throws Exception {
-        // When installing without the ATLauncher API (e.g. offline), the installer hash isn't
-        // provided in the metadata, so fetch it from the Forge Maven's .sha1 file.
-        if (installerSha1 == null) {
-            String sha1 = Download.build().setUrl(this.installerUrl + ".sha1").asString();
+        // We download the installer from the Forge Maven, so its published .sha1 is the only
+        // authoritative hash. The metadata's hash/size describe the ATLauncher CDN copy, which
+        // goes stale whenever Forge repackages an installer, so the Maven one always wins.
+        String sha1 = Download.build().setUrl(this.installerUrl + ".sha1").asString();
 
-            if (sha1 != null && sha1.matches("\\p{XDigit}{40}")) {
-                installerSha1 = sha1;
+        if (sha1 != null && sha1.matches("\\p{XDigit}{40}")) {
+            if (!sha1.equalsIgnoreCase(installerSha1)) {
+                installerSize = null;
             }
+
+            installerSha1 = sha1;
         }
 
         OkHttpClient httpClient = Network.createProgressClient(instanceInstaller);
