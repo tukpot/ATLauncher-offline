@@ -27,6 +27,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import com.atlauncher.FileSystem;
@@ -72,9 +74,14 @@ public class ForgeLoader implements Loader {
         this.tempDir = tempDir;
         this.instanceInstaller = instanceInstaller;
 
+        // if the raw version (the version used by the Forge Maven) was given to us, rather than
+        // being something we have to work out ourselves. See getRawVersion below.
+        boolean hasRawVersion = false;
+
         if (versionOverride != null) {
             this.version = versionOverride.version;
             this.rawVersion = versionOverride.rawVersion;
+            hasRawVersion = this.rawVersion != null;
 
             Pair<String, Long> installerDownloadable = versionOverride.downloadables.get("installer");
             if (installerDownloadable != null) {
@@ -90,8 +97,9 @@ public class ForgeLoader implements Loader {
             this.version = (String) metadata.get("version");
             this.rawVersion = this.minecraft + "-" + this.version;
 
-            if (metadata.containsKey("rawVersion")) {
+            if (metadata.get("rawVersion") != null) {
                 this.rawVersion = (String) metadata.get("rawVersion");
+                hasRawVersion = true;
             }
         } else if ((boolean) metadata.get("latest")) {
             LogManager.debug("Downloading latest Forge version");
@@ -101,12 +109,17 @@ public class ForgeLoader implements Loader {
             this.version = getRecommendedVersion(this.minecraft);
         }
 
+        if (!hasRawVersion && this.version != null) {
+            this.rawVersion = getRawVersion(this.minecraft, this.version);
+        }
+
         this.installerPath = FileSystem.LOADERS
                 .resolve("forge-" + this.minecraft + "-" + this.version + "-installer.jar");
         // Download the installer straight from the official Forge Maven instead of the
-        // ATLauncher CDN, so installs work without the ATLauncher API/CDN being reachable.
-        this.installerUrl = Constants.FORGE_MAVEN + "/" + this.minecraft + "-" + this.version + "/forge-"
-                + this.minecraft + "-" + this.version + "-installer.jar";
+        // ATLauncher CDN, so installs work without the ATLauncher API/CDN being reachable. The
+        // Maven stores the installer under the raw version, which the CDN doesn't use.
+        this.installerUrl = Constants.FORGE_MAVEN + "/" + this.rawVersion + "/forge-" + this.rawVersion
+                + "-installer.jar";
 
         if (metadata.containsKey("installerSize")) {
             Object value = metadata.get("installerSize");
@@ -158,6 +171,52 @@ public class ForgeLoader implements Loader {
         }
 
         return getRecommendedVersion(minecraft);
+    }
+
+    /**
+     * Gets the version used by the Forge Maven for a given Minecraft version and Forge version.
+     *
+     * Most versions live under "&lt;minecraft&gt;-&lt;version&gt;", but a lot of the older ones
+     * (1.7.10, 1.8, 1.8.9 and so on) were published with a branch suffix on top of that, such as
+     * "1.7.10-10.13.4.1614-1.7.10". The ATLauncher API hands that out as the rawVersion, so this
+     * is only needed when installing without it, where we look it up in the Maven's own metadata.
+     *
+     * If the metadata can't be read, this falls back to the unsuffixed version.
+     */
+    public static String getRawVersion(String minecraft, String version) {
+        String rawVersion = minecraft + "-" + version;
+
+        String metadata = Download.build().setUrl(Constants.FORGE_MAVEN + "/maven-metadata.xml")
+                .cached(new CacheControl.Builder().maxStale(1, TimeUnit.HOURS).build()).asString();
+
+        if (metadata == null) {
+            LogManager.warn("Failed to get the Forge Maven metadata, assuming Forge version " + rawVersion);
+            return rawVersion;
+        }
+
+        Matcher matcher = Pattern.compile("<version>" + Pattern.quote(rawVersion) + "(-[^<]+)?</version>")
+                .matcher(metadata);
+        String suffixedVersion = null;
+
+        while (matcher.find()) {
+            // an exact match means there's no branch suffix to deal with
+            if (matcher.group(1) == null) {
+                return rawVersion;
+            }
+
+            if (suffixedVersion == null) {
+                suffixedVersion = rawVersion + matcher.group(1);
+            }
+        }
+
+        if (suffixedVersion == null) {
+            LogManager.warn("Failed to find Forge version " + rawVersion + " in the Forge Maven metadata");
+            return rawVersion;
+        }
+
+        LogManager.debug("Forge version " + rawVersion + " is published as " + suffixedVersion);
+
+        return suffixedVersion;
     }
 
     @Override

@@ -696,7 +696,7 @@ public class InstanceInstaller extends SwingWorker<Boolean, Void> implements Net
                     // Fallback (offline / ATLauncher API unavailable): the Forge loader downloads
                     // the installer directly from the Forge Maven and fetches the sha1 from the
                     // .sha1 file, so build the metadata from the version in the manifest. Leaving
-                    // rawVersion unset lets ForgeLoader default it to "<minecraft>-<version>".
+                    // rawVersion unset makes ForgeLoader resolve it from the Forge Maven metadata.
                     LogManager.warn("Failed to resolve Forge version " + forgeVersionString
                         + " via ATLauncher API, using version from manifest directly");
                     loaderMeta.put("version", forgeVersionString);
